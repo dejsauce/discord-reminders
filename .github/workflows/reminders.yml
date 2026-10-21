@@ -1,0 +1,33 @@
+name: Event reminders
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency: event-reminders
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Send due reminders
+        run: python remind.py
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
+          DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
+          LEAD_MINUTES: "120"
+          MENTION: "@everyone"
+
+      - name: Record which reminders went out
+        run: |
+          git config user.name "event-reminder-bot"
+          git config user.email "event-reminder-bot@users.noreply.github.com"
+          git add sent.json
+          git diff --cached --quiet || (git commit -m "Record sent reminders" && git push)

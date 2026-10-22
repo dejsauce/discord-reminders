@@ -2,7 +2,7 @@ name: Event reminders
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -23,6 +23,7 @@ jobs:
           DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
           DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
           LEAD_MINUTES: "120"
+          START_REMINDER: "on"
           MENTION: "@everyone"
 
       - name: Record which reminders went out

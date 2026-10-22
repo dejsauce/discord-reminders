@@ -11,11 +11,14 @@ TOKEN = os.environ["DISCORD_BOT_TOKEN"]
 GUILD_ID = os.environ["DISCORD_GUILD_ID"]
 CHANNEL_ID = os.environ["DISCORD_CHANNEL_ID"]
 LEAD_MINUTES = int(os.environ.get("LEAD_MINUTES", "120"))
+START_REMINDER = os.environ.get("START_REMINDER", "on") == "on"
 MENTION = os.environ.get("MENTION", "@everyone")
 DRY_RUN = os.environ.get("DRY_RUN") == "1"
 
 SENT_FILE = Path(__file__).with_name("sent.json")
-SCHEDULED = 1
+SCHEDULED, ACTIVE = 1, 2
+START_EARLY = timedelta(minutes=5)   # "starting now" can go out up to 5 min early
+START_GRACE = timedelta(minutes=30)  # ...and is skipped if the bot is 30+ min late
 
 
 def discord(method, path, body=None):
@@ -51,17 +54,33 @@ def where(event):
     return loc or None
 
 
-def build_message(event, start):
+def build_message(event, start, starting_now):
     ts = int(start.timestamp())
-    lines = [
-        f"{MENTION} ⏰ **Reminder: {event['name']}** is tonight!",
-        f"🕒 Starts <t:{ts}:t> (<t:{ts}:R>)",
-    ]
+    if starting_now:
+        lines = [f"{MENTION} 🚨 **{event['name']}** is starting now!"]
+    else:
+        lines = [
+            f"{MENTION} ⏰ **Reminder: {event['name']}** is tonight!",
+            f"🕒 Starts <t:{ts}:t> (<t:{ts}:R>)",
+        ]
     loc = where(event)
     if loc:
         lines.append(f"📍 {loc}")
     lines.append(f"🔗 https://discord.com/events/{GUILD_ID}/{event['id']}")
     return "\n".join(lines)
+
+
+def send(event, start, starting_now):
+    msg = build_message(event, start, starting_now)
+    kind = "start" if starting_now else "early"
+    print(f"Sending {kind} reminder for '{event['name']}' (starts {start.isoformat()})")
+    if DRY_RUN:
+        print(msg)
+    else:
+        discord("POST", f"/channels/{CHANNEL_ID}/messages", {
+            "content": msg,
+            "allowed_mentions": {"parse": ["everyone", "roles"]},
+        })
 
 
 def main():
@@ -70,25 +89,25 @@ def main():
     events = discord("GET", f"/guilds/{GUILD_ID}/scheduled-events")
 
     for event in events:
-        if event.get("status") != SCHEDULED:
+        status = event.get("status")
+        if status not in (SCHEDULED, ACTIVE):
             continue
         start = datetime.fromisoformat(event["scheduled_start_time"].replace("Z", "+00:00"))
-        remind_at = start - timedelta(minutes=LEAD_MINUTES)
         key = f"{event['id']}@{event['scheduled_start_time']}"
 
-        if key in sent or not (remind_at <= now < start):
-            continue
+        # Early reminder: from LEAD_MINUTES before until shortly before the start
+        early_key = key
+        if (status == SCHEDULED and early_key not in sent
+                and start - timedelta(minutes=LEAD_MINUTES) <= now < start - START_EARLY):
+            send(event, start, starting_now=False)
+            sent[early_key] = now.isoformat()
 
-        msg = build_message(event, start)
-        print(f"Reminding for '{event['name']}' (starts {start.isoformat()})")
-        if DRY_RUN:
-            print(msg)
-        else:
-            discord("POST", f"/channels/{CHANNEL_ID}/messages", {
-                "content": msg,
-                "allowed_mentions": {"parse": ["everyone", "roles"]},
-            })
-        sent[key] = now.isoformat()
+        # Start reminder: right around the start time
+        start_key = key + "@start"
+        if (START_REMINDER and start_key not in sent
+                and start - START_EARLY <= now < start + START_GRACE):
+            send(event, start, starting_now=True)
+            sent[start_key] = now.isoformat()
 
     cutoff = now - timedelta(days=30)
     sent = {k: v for k, v in sent.items() if datetime.fromisoformat(v) > cutoff}
